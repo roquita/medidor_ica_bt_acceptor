@@ -16,13 +16,14 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_mac.h"
+#include "freertos/ringbuf.h"
 
 #include "time.h"
 #include "sys/time.h"
 
 #define CONF_PIN (GPIO_NUM_21)
-#define TXD_PIN (GPIO_NUM_17)//(GPIO_NUM_18)
-#define RXD_PIN (GPIO_NUM_16)//(GPIO_NUM_19)
+#define TXD_PIN (GPIO_NUM_17) //(GPIO_NUM_18)
+#define RXD_PIN (GPIO_NUM_16) //(GPIO_NUM_19)
 #define TEN_PIN (GPIO_NUM_22)
 static const int RX_BUF_SIZE = 2048;
 
@@ -38,9 +39,13 @@ static const esp_spp_mode_t esp_spp_mode = ESP_SPP_MODE_CB;
 static struct timeval time_new, time_old;
 static long data_num = 0;
 
-static const esp_spp_sec_t sec_mask = ESP_SPP_SEC_AUTHENTICATE; //ESP_SPP_SEC_AUTHENTICATE;
+static const esp_spp_sec_t sec_mask = ESP_SPP_SEC_AUTHENTICATE; // ESP_SPP_SEC_AUTHENTICATE;
 static const esp_spp_role_t role_slave = ESP_SPP_ROLE_SLAVE;
 uint32_t bthandle = 0;
+bool write_flag_enabled = true;
+bool is_cong_needed = false;
+RingbufHandle_t buf_handle;
+bool read_flag_enabled = false;
 
 char device_id[50];
 
@@ -52,22 +57,62 @@ void create_device_id()
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-static void rx_task(void *arg)
+static void uart_tx_task(void *arg)
+{
+    static const char *TX_TASK_TAG = "TX_TASK";
+    esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
+
+    buf_handle = xRingbufferCreate(1028, RINGBUF_TYPE_BYTEBUF);
+
+    while (1)
+    {
+        if (read_flag_enabled)
+        {
+            vTaskDelay(pdMS_TO_TICKS(300));//vTaskDelay(pdMS_TO_TICKS(200));
+
+            size_t size = 0;
+            void *data = xRingbufferReceive(buf_handle, &size, pdMS_TO_TICKS(1000));
+
+            if (data)
+            {
+                gpio_set_level(TEN_PIN, 1);
+                uart_write_bytes(UART_NUM_2, data, size);
+                uart_wait_tx_done(UART_NUM_2, portMAX_DELAY);
+                gpio_set_level(TEN_PIN, 0);
+
+                vRingbufferReturnItem(buf_handle, data);
+            }
+            read_flag_enabled = false;
+        }
+        vTaskDelay(1);
+    }
+}
+
+static void uart_rx_task(void *arg)
 {
     static const char *RX_TASK_TAG = "RX_TASK";
     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
     uint8_t *data = (uint8_t *)malloc(RX_BUF_SIZE + 1);
+    int rxBytes = 0;
     while (1)
     {
-        const int rxBytes = uart_read_bytes(UART_NUM_2, data, RX_BUF_SIZE, 1);
-        if (rxBytes > 0 && bthandle != 0)
+        rxBytes += uart_read_bytes(UART_NUM_2, data, RX_BUF_SIZE, pdMS_TO_TICKS(20)); // pdMS_TO_TICKS(1)
+        if (bthandle == 0)
+        {
+            memset(data, 0, RX_BUF_SIZE);
+            continue;
+        }
+        if (rxBytes > 0 && write_flag_enabled)
         {
             data[rxBytes] = 0;
-            //ESP_LOGI(RX_TASK_TAG, "Read %d bytes: '%s'", rxBytes, data);
-            //ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, data, rxBytes, ESP_LOG_INFO);
+            ESP_LOGI(RX_TASK_TAG, "Read %d bytes'", rxBytes);
+            // ESP_LOGI(RX_TASK_TAG, "Read %d bytes: '%s'", rxBytes, data);
+            // ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, data, rxBytes, ESP_LOG_INFO);
             esp_spp_write(bthandle, rxBytes, data);
+            rxBytes = 0;
+            write_flag_enabled = false;
         }
-        //vTaskDelay(pdMS_TO_TICKS(10));
+        // vTaskDelay(pdMS_TO_TICKS(10));
     }
     free(data);
 }
@@ -112,18 +157,23 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         break;
     case ESP_SPP_DATA_IND_EVT:
 #if (SPP_SHOW_MODE == SPP_SHOW_DATA)
-        //ESP_LOGI(SPP_TAG, "ESP_SPP_DATA_IND_EVT len=%d handle=%d",
-        //         param->data_ind.len, param->data_ind.handle);
-        //esp_log_buffer_hex("", param->data_ind.data, param->data_ind.len);
-        //esp_spp_write(param->cong.handle, 7, (uint8_t *)"hola bb");
-        //printf("bt habdle: %d\n", param->data_ind.handle);
-        //printf("bt habdle ram: %d\n", bthandle);
-        gpio_set_level(TEN_PIN, 1);
-        //vTaskDelay(pdMS_TO_TICKS(1));
-        //uart_tx_chars(UART_NUM_2, (const char *)param->data_ind.data, param->data_ind.len);
-        uart_write_bytes(UART_NUM_2, (void *)param->data_ind.data, param->data_ind.len);
-        uart_wait_tx_done(UART_NUM_2, portMAX_DELAY);
-        gpio_set_level(TEN_PIN, 0);
+        // ESP_LOGI(SPP_TAG, "ESP_SPP_DATA_IND_EVT len=%d handle=%d",
+        //          param->data_ind.len, param->data_ind.handle);
+        // esp_log_buffer_hex("", param->data_ind.data, param->data_ind.len);
+        // esp_spp_write(param->cong.handle, 7, (uint8_t *)"hola bb");
+        // printf("bt habdle: %d\n", param->data_ind.handle);
+        // printf("bt habdle ram: %d\n", bthandle);
+        /*
+                gpio_set_level(TEN_PIN, 1);
+                uart_write_bytes(UART_NUM_2, (void *)param->data_ind.data, param->data_ind.len);
+                uart_wait_tx_done(UART_NUM_2, portMAX_DELAY);
+                gpio_set_level(TEN_PIN, 0);
+                */
+
+        // Send an item
+        xRingbufferSend(buf_handle, param->data_ind.data, param->data_ind.len, pdMS_TO_TICKS(1000));
+        read_flag_enabled = true;
+
 #else
         gettimeofday(&time_new, NULL);
         data_num += param->data_ind.len;
@@ -135,9 +185,27 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         break;
     case ESP_SPP_CONG_EVT:
         ESP_LOGI(SPP_TAG, "ESP_SPP_CONG_EVT");
+
+        if (is_cong_needed && param->cong.cong == false)
+        {
+            is_cong_needed = false;
+            write_flag_enabled = true;
+        }
+
         break;
     case ESP_SPP_WRITE_EVT:
-        //ESP_LOGI(SPP_TAG, "ESP_SPP_WRITE_EVT");
+        ESP_LOGI(SPP_TAG, "ESP_SPP_WRITE_EVT || cong : %d", param->write.cong);
+        // write_flag_enabled = true;
+
+        if (param->write.cong == false)
+        {
+            write_flag_enabled = true;
+        }
+        else
+        {
+            is_cong_needed = true;
+        }
+
         break;
     case ESP_SPP_SRV_OPEN_EVT:
         ESP_LOGI(SPP_TAG, "ESP_SPP_SRV_OPEN_EVT");
@@ -288,7 +356,7 @@ void app_main(void)
      * Set default parameters for Legacy Pairing
      * Use variable pin, input pin code when pairing
      */
-    esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED; //ESP_BT_PIN_TYPE_VARIABLE;
+    esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED; // ESP_BT_PIN_TYPE_VARIABLE;
     esp_bt_pin_code_t pin_code = {'5', '5', '5', '5', '5'};
     esp_bt_gap_set_pin(pin_type, 5, pin_code);
 
@@ -330,7 +398,8 @@ void app_main(void)
     uart_param_config(UART_NUM_2, &uart_config);
     uart_set_pin(UART_NUM_2, TXD_PIN, RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
 
-    xTaskCreate(rx_task, "uart_rx_task", 1024 * 2, NULL, configMAX_PRIORITIES, NULL);
+    xTaskCreate(uart_rx_task, "uart_rx_task", 1024 * 2, NULL, configMAX_PRIORITIES, NULL);
+    xTaskCreate(uart_tx_task, "uart_tx_task", 1024 * 2, NULL, configMAX_PRIORITIES, NULL);
 
     printf("config done!!!!\n\r");
 }
