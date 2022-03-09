@@ -68,7 +68,7 @@ static void uart_tx_task(void *arg)
     {
         if (read_flag_enabled)
         {
-            vTaskDelay(pdMS_TO_TICKS(300));//vTaskDelay(pdMS_TO_TICKS(200));
+            vTaskDelay(pdMS_TO_TICKS(300)); // vTaskDelay(pdMS_TO_TICKS(200));
 
             size_t size = 0;
             void *data = xRingbufferReceive(buf_handle, &size, pdMS_TO_TICKS(1000));
@@ -96,10 +96,11 @@ static void uart_rx_task(void *arg)
     int rxBytes = 0;
     while (1)
     {
-        rxBytes += uart_read_bytes(UART_NUM_2, data, RX_BUF_SIZE, pdMS_TO_TICKS(20)); // pdMS_TO_TICKS(1)
+        rxBytes += uart_read_bytes(UART_NUM_2, data + rxBytes, RX_BUF_SIZE - rxBytes, pdMS_TO_TICKS(20)); // pdMS_TO_TICKS(1)
         if (bthandle == 0)
         {
-            memset(data, 0, RX_BUF_SIZE);
+            memset(data, 0, rxBytes);
+            rxBytes = 0;
             continue;
         }
         if (rxBytes > 0 && write_flag_enabled)
@@ -148,8 +149,18 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         bthandle = 0;
         break;
     case ESP_SPP_START_EVT:
-        ESP_LOGI(SPP_TAG, "ESP_SPP_START_EVT");
-        esp_bt_dev_set_device_name(device_id);
+        ESP_LOGI(SPP_TAG, "ESP_SPP_START_EVT");/*
+        if (gpio_get_level(CONF_PIN) == 0) // 7E1
+        {
+            printf("name 7e1\n");
+            esp_bt_dev_set_device_name("AS1440");
+        }
+        else // 8N1
+        {
+            printf("name 8n1\n");
+            esp_bt_dev_set_device_name("A1800");
+        }*/
+        // esp_bt_dev_set_device_name(device_id);
         esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
         break;
     case ESP_SPP_CL_INIT_EVT:
@@ -290,6 +301,15 @@ void esp_bt_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
 
 void app_main(void)
 {
+    const gpio_config_t gpio_conf = {
+        .pin_bit_mask = 1UL << CONF_PIN,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&gpio_conf);
+
     create_device_id();
 
     esp_err_t ret = nvs_flash_init();
@@ -327,6 +347,17 @@ void app_main(void)
         return;
     }
 
+            if (gpio_get_level(CONF_PIN) == 0) // 7E1
+        {
+            printf("name 7e1\n");
+            esp_bt_dev_set_device_name("AS1440");
+        }
+        else // 8N1
+        {
+            printf("name 8n1\n");
+            esp_bt_dev_set_device_name("A1800");
+        }
+
     if ((ret = esp_bt_gap_register_callback(esp_bt_gap_cb)) != ESP_OK)
     {
         ESP_LOGE(SPP_TAG, "%s gap register failed: %s\n", __func__, esp_err_to_name(ret));
@@ -359,15 +390,6 @@ void app_main(void)
     esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED; // ESP_BT_PIN_TYPE_VARIABLE;
     esp_bt_pin_code_t pin_code = {'5', '5', '5', '5', '5'};
     esp_bt_gap_set_pin(pin_type, 5, pin_code);
-
-    const gpio_config_t gpio_conf = {
-        .pin_bit_mask = 1UL << CONF_PIN,
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&gpio_conf);
 
     const gpio_config_t ten_conf = {
         .pin_bit_mask = 1UL << TEN_PIN,
