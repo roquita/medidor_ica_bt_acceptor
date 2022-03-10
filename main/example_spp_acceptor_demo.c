@@ -143,23 +143,28 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         break;
     case ESP_SPP_OPEN_EVT:
         ESP_LOGI(SPP_TAG, "ESP_SPP_OPEN_EVT");
+        /*
+        uint8_t sync = (uint8_t)gpio_get_level(CONF_PIN);
+        esp_err_t err = esp_spp_write(bthandle, 1, &sync);
+        ESP_LOGI(SPP_TAG, "err: %d", err);
+        write_flag_enabled = false;*/
         break;
     case ESP_SPP_CLOSE_EVT:
         ESP_LOGI(SPP_TAG, "ESP_SPP_CLOSE_EVT");
         bthandle = 0;
         break;
     case ESP_SPP_START_EVT:
-        ESP_LOGI(SPP_TAG, "ESP_SPP_START_EVT");/*
-        if (gpio_get_level(CONF_PIN) == 0) // 7E1
-        {
-            printf("name 7e1\n");
-            esp_bt_dev_set_device_name("AS1440");
-        }
-        else // 8N1
-        {
-            printf("name 8n1\n");
-            esp_bt_dev_set_device_name("A1800");
-        }*/
+        ESP_LOGI(SPP_TAG, "ESP_SPP_START_EVT"); /*
+         if (gpio_get_level(CONF_PIN) == 0) // 7E1
+         {
+             printf("name 7e1\n");
+             esp_bt_dev_set_device_name("AS1440");
+         }
+         else // 8N1
+         {
+             printf("name 8n1\n");
+             esp_bt_dev_set_device_name("A1800");
+         }*/
         // esp_bt_dev_set_device_name(device_id);
         esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
         break;
@@ -220,8 +225,14 @@ static void esp_spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         break;
     case ESP_SPP_SRV_OPEN_EVT:
         ESP_LOGI(SPP_TAG, "ESP_SPP_SRV_OPEN_EVT");
-        gettimeofday(&time_old, NULL);
+        // gettimeofday(&time_old, NULL);
         bthandle = param->data_ind.handle;
+
+        uint8_t sync = (uint8_t)gpio_get_level(CONF_PIN);
+        //uint8_t sync = 1;
+        esp_err_t err = esp_spp_write(bthandle, 1, &sync);
+        ESP_LOGI(SPP_TAG, "err: %d", err);
+        write_flag_enabled = false;
         break;
     case ESP_SPP_SRV_STOP_EVT:
         ESP_LOGI(SPP_TAG, "ESP_SPP_SRV_STOP_EVT");
@@ -347,16 +358,16 @@ void app_main(void)
         return;
     }
 
-            if (gpio_get_level(CONF_PIN) == 0) // 7E1
-        {
-            printf("name 7e1\n");
-            esp_bt_dev_set_device_name("AS1440");
-        }
-        else // 8N1
-        {
-            printf("name 8n1\n");
-            esp_bt_dev_set_device_name("A1800");
-        }
+    if (gpio_get_level(CONF_PIN) == 0) // 7E1
+    {
+        printf("name 7e1\n");
+        esp_bt_dev_set_device_name("AS1440");
+    }
+    else // 8N1
+    {
+        printf("name 8n1\n");
+        esp_bt_dev_set_device_name("A1800");
+    }
 
     if ((ret = esp_bt_gap_register_callback(esp_bt_gap_cb)) != ESP_OK)
     {
